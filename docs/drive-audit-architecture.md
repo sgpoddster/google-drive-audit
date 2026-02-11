@@ -2,7 +2,9 @@
 
 ## Overview
 
-The Drive Folder Audit script scans shared Google Drive folders to identify files that are not stored in the correct year-based subfolder structure. It enforces the organizational pattern where client folders should contain year subfolders (2024, 2025, 2026), with session folders nested within the appropriate year.
+The Drive Folder Audit script (v1.1.0) scans shared Google Drive folders to identify **shoot folders** that are not stored in the correct year-based subfolder structure. It enforces the organizational pattern where client folders should contain year subfolders (2024, 2025, 2026), with shoot folders nested within the appropriate year.
+
+The script uses keyword-based detection to identify shoot folders (containing words like "nova", "exec", "club", etc.) and only flags these as organizational issues, allowing other folders like "Branding" or "Project Files" to exist at the client root level.
 
 ## Expected Folder Structure
 
@@ -22,15 +24,29 @@ Shared Drive Root
 ```
 Shared Drive Root
 └── Client Folder (e.g., "Uma Thana (Z8T)")
-    ├── 3pm 11 Nov - Exec    ← Session folder directly under client (FLAGGED)
-    └── 5pm 6 Nov - Exec     ← Session folder directly under client (FLAGGED)
+    ├── 3pm 11 Nov - Exec    ← Shoot folder directly under client (FLAGGED)
+    ├── 5pm 6 Nov - Club     ← Shoot folder directly under client (FLAGGED)
+    ├── Branding             ← Non-shoot folder (ALLOWED - not flagged)
+    └── Project Files        ← Non-shoot folder (ALLOWED - not flagged)
 ```
 
-## Script Flow
+### Shoot Folder Detection
+
+The script identifies shoot folders by checking if the folder name contains any of these keywords (case-insensitive):
+- **nova**
+- **nest**
+- **exec**
+- **iris**
+- **club**
+- **soho**
+
+Folders without these keywords are considered organizational folders (like "Branding", "Project Files") and are allowed at the client root level.
+
+## Script Flow (v1.1.0)
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                         runAudit()                               │
+│                    runAudit() / runAuditWithLimit()              │
 │  Entry point - sets up sheets, processes folders, writes output │
 └─────────────────────────────────────────────────────────────────┘
                                 │
@@ -39,54 +55,62 @@ Shared Drive Root
         │  For each configured folder (FOLDER_ID_1, │
         │  FOLDER_ID_2), get first-level subfolders │
         │  (client folders)                         │
+        │  Track scan statistics                    │
         └───────────────────────────────────────────┘
                                 │
                                 ▼
         ┌───────────────────────────────────────────┐
         │         auditClientFolder()               │
         │  For each client folder:                  │
-        │  1. Check for files directly in client    │
-        │  2. Iterate through subfolders            │
+        │  1. Iterate through subfolders            │
+        │  2. Check if subfolder is year folder     │
+        │  3. Check if subfolder is shoot folder    │
+        │  4. Return ONE issue if ANY shoot folders │
         └───────────────────────────────────────────┘
                                 │
             ┌───────────────────┴───────────────────┐
             ▼                                       ▼
 ┌─────────────────────────┐           ┌─────────────────────────┐
-│   checkYearFolder()     │           │  checkNonYearFolder()   │
-│   If subfolder is a     │           │  If subfolder is NOT a  │
-│   year (2024/2025/2026) │           │  year folder, flag all  │
-│   verify files match    │           │  files as misplaced     │
-│   that year             │           │                         │
+│   VALID_YEARS check     │           │  SHOOT_KEYWORDS check   │
+│   folder in 2024,       │           │  folder contains nova,  │
+│   2025, 2026            │           │  exec, club, etc.       │
+│   → Allowed (skip)      │           │  → FLAG as issue        │
 └─────────────────────────┘           └─────────────────────────┘
             │                                       │
             └───────────────────┬───────────────────┘
                                 ▼
         ┌───────────────────────────────────────────┐
-        │       getAllFilesInFolder()               │
-        │  Recursively collects all files with      │
-        │  their relative paths                     │
+        │  Create ONE issue per client summarizing  │
+        │  all shoot folders that need organizing   │
+        │  (e.g., "3 shoot folders need             │
+        │  organizing: folder1, folder2, folder3")  │
         └───────────────────────────────────────────┘
                                 │
                                 ▼
         ┌───────────────────────────────────────────┐
         │  Write results to "Audit Results" sheet   │
-        │  Write summary to "Summary" sheet         │
+        │  Write summary with scan stats to         │
+        │  "Summary" sheet                          │
         │  Apply formatting and conditional rules   │
         └───────────────────────────────────────────┘
 ```
 
 ## Key Functions
 
-| Function | Purpose |
-|----------|---------|
-| `onOpen()` | Creates custom menu in Google Sheets UI |
-| `runAudit()` | Main orchestrator - scans folders, writes results |
-| `auditClientFolder()` | Processes a single client folder, returns issues array |
-| `checkYearFolder()` | Validates files in year folders have matching creation dates |
-| `checkNonYearFolder()` | Flags all files in non-year folders as misplaced |
-| `getAllFilesInFolder()` | Recursive helper to get all files with path info |
-| `formatDate()` | Formats dates for display in sheet |
-| `clearResults()` | Clears both output sheets |
+| Function | Purpose | Lines |
+|----------|---------|-------|
+| `onOpen()` | Creates custom menu in Google Sheets UI with debug options | 31-43 |
+| `runAudit()` | Main orchestrator - calls runAuditWithLimit(0) | 45-50 |
+| `runAuditWithLimit()` | Core audit logic - scans folders, writes results, tracks stats | 503-735 |
+| `auditClientFolder()` | Processes a single client folder, checks for shoot folders | 58-120 |
+| `testFolderAccess()` | Diagnostic tool to verify folder IDs and access | 324-449 |
+| `runAuditDebugMode()` | Runs audit on first 5 clients with debug logging | 477-497 |
+| `logDebug()` | Writes debug messages to "Debug Log" sheet | 456-472 |
+| `clearResults()` | Clears Audit Results and Summary sheets | 304-318 |
+| `checkYearFolder()` | *(Legacy)* Validates files in year folders | 122-149 |
+| `checkNonYearFolder()` | *(Legacy)* Flags files in non-year folders | 238-268 |
+| `getAllFilesInFolder()` | *(Legacy)* Recursive file scanner | 276-313 |
+| `formatDate()` | Formats dates for display | 320-322 |
 
 ## Data Flow
 

@@ -1,10 +1,10 @@
 # Drive Folder Audit - Project Status
 
-## Current Version: v1.0.0
+## Current Version: v1.1.0
 
-**Last Updated:** 2026-02-03
+**Last Updated:** 2026-02-11
 
-## Status: ✅ Initial Release Complete
+## Status: ✅ Major Update Complete - Smart Shoot Folder Detection
 
 ---
 
@@ -15,13 +15,18 @@
 | Scan two shared Drive folders | ✅ Done | v1.0.0 |
 | Identify first-level client folders | ✅ Done | v1.0.0 |
 | Check year folder structure (2024/2025/2026) | ✅ Done | v1.0.0 |
-| Flag files in wrong year folders | ✅ Done | v1.0.0 |
-| Flag files/folders missing year organization | ✅ Done | v1.0.0 |
+| Smart shoot folder detection | ✅ Done | v1.1.0 |
+| Keyword-based folder filtering | ✅ Done | v1.1.0 |
+| One issue per client consolidation | ✅ Done | v1.1.0 |
+| Allow non-shoot folders at client root | ✅ Done | v1.1.0 |
 | Write results to Google Sheet | ✅ Done | v1.0.0 |
-| Summary statistics sheet | ✅ Done | v1.0.0 |
+| Enhanced summary statistics sheet | ✅ Done | v1.1.0 |
 | Custom menu integration | ✅ Done | v1.0.0 |
+| Debug mode for testing | ✅ Done | v1.1.0 |
+| Test folder access diagnostic | ✅ Done | v1.1.0 |
+| Debug logging system | ✅ Done | v1.1.0 |
 | Conditional formatting for issue types | ✅ Done | v1.0.0 |
-| Direct file links in output | ✅ Done | v1.0.0 |
+| Direct folder links in output | ✅ Done | v1.0.0 |
 
 ---
 
@@ -75,4 +80,5 @@
 
 | Version | Date | Summary |
 |---------|------|---------|
+| v1.1.0 | 2026-02-11 | Smart shoot folder detection, debug mode, enhanced statistics |
 | v1.0.0 | 2026-02-03 | Initial release with core audit functionality |
