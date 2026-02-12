@@ -32,7 +32,7 @@ let DEBUG_MODE = false;
 
 // Execution time limits (in milliseconds)
 const MAX_EXECUTION_TIME = 5 * 60 * 1000; // 5 minutes (leave 1 minute buffer)
-const EXECUTION_START_TIME = new Date().getTime();
+let EXECUTION_START_TIME = null; // Set when audit starts
 
 // ============ MAIN FUNCTIONS ============
 
@@ -609,9 +609,18 @@ function testFolderAccess() {
  * @returns {boolean} True if we should stop processing
  */
 function isApproachingTimeLimit() {
+  if (!EXECUTION_START_TIME) {
+    return false; // Timer not started yet
+  }
   const currentTime = new Date().getTime();
   const elapsed = currentTime - EXECUTION_START_TIME;
-  return elapsed >= MAX_EXECUTION_TIME;
+  const approaching = elapsed >= MAX_EXECUTION_TIME;
+
+  if (approaching) {
+    Logger.log(`Time limit check: ${elapsed}ms elapsed (limit: ${MAX_EXECUTION_TIME}ms)`);
+  }
+
+  return approaching;
 }
 
 /**
@@ -931,6 +940,10 @@ function runAuditWithLimit(maxClients = 0) {
  * @param {number} maxClients - Maximum number of client folders to process (0 = no limit)
  */
 function runAuditPprojWithLimit(maxClients = 0) {
+  // Start the execution timer
+  EXECUTION_START_TIME = new Date().getTime();
+  Logger.log(`Audit started at ${new Date().toISOString()}`);
+
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   let sheet = ss.getSheetByName('Audit Results - Premiere');
 
@@ -1008,9 +1021,12 @@ function runAuditPprojWithLimit(maxClients = 0) {
       }
 
       // Check execution time before processing each client
+      const elapsed = new Date().getTime() - EXECUTION_START_TIME;
+      Logger.log(`  Time check: ${Math.floor(elapsed / 1000)}s elapsed`);
+
       if (isApproachingTimeLimit()) {
-        Logger.log(`  Approaching time limit, saving progress and scheduling continuation...`);
-        logDebug(`Time limit approaching`, { clientsProcessed: clientsProcessed });
+        Logger.log(`  ⏰ TIME LIMIT REACHED - Approaching time limit, saving progress and scheduling continuation...`);
+        logDebug(`Time limit approaching`, { clientsProcessed: clientsProcessed, elapsedSeconds: Math.floor(elapsed / 1000) });
         hitTimeLimit = true;
         break;
       }
