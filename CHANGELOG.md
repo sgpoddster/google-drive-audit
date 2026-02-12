@@ -4,6 +4,22 @@ All notable changes to the Drive Folder Audit Script will be documented in this 
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [1.3.0] - 2025-02-12
+
+### Added
+- **Execution Time Management**: Audit now automatically pauses and resumes when approaching the 6-minute Google Apps Script execution limit
+  - Monitors execution time and stops gracefully after completing the current client folder check
+  - Saves progress to script properties for seamless continuation
+  - Automatically schedules a continuation trigger after 30 seconds
+  - Tracks which clients have been processed to avoid duplicates
+  - Cleans up triggers after completion
+  - Shows resume status in completion alert
+- Helper functions: `isApproachingTimeLimit()`, `saveProgress()`, `loadProgress()`, `clearProgress()`, `cleanupTriggers()`
+
+### Changed
+- `runAuditPproj()` now clears any existing progress state when starting fresh
+- `runAuditPprojWithLimit()` can resume from saved progress automatically
+
 ## [1.2.0] - 2025-02-12
 
 ### Changed

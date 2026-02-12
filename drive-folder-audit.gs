@@ -30,6 +30,10 @@ const PPROJ_FILE_EXTENSION = '.prproj';
 // Debug mode flag
 let DEBUG_MODE = false;
 
+// Execution time limits (in milliseconds)
+const MAX_EXECUTION_TIME = 5 * 60 * 1000; // 5 minutes (leave 1 minute buffer)
+const EXECUTION_START_TIME = new Date().getTime();
+
 // ============ MAIN FUNCTIONS ============
 
 /**
@@ -61,7 +65,33 @@ function runAudit() {
  * Runs Premiere Pro project file audit
  */
 function runAuditPproj() {
+  // Clear any existing progress state
+  PropertiesService.getScriptProperties().deleteProperty('PPROJ_AUDIT_PROGRESS');
   runAuditPprojWithLimit(0); // 0 = no limit, process all clients
+}
+
+/**
+ * Continues a Premiere Pro audit that was interrupted by execution time limit
+ * This is automatically triggered by the main audit function
+ */
+function continueAuditPproj() {
+  // Clean up the trigger that called this function
+  cleanupTriggers('continueAuditPproj');
+
+  runAuditPprojWithLimit(0); // Will automatically resume from saved progress
+}
+
+/**
+ * Removes all triggers for a specific function
+ * @param {string} functionName - Name of the function to remove triggers for
+ */
+function cleanupTriggers(functionName) {
+  const triggers = ScriptApp.getProjectTriggers();
+  for (const trigger of triggers) {
+    if (trigger.getHandlerFunction() === functionName) {
+      ScriptApp.deleteTrigger(trigger);
+    }
+  }
 }
 
 /**
@@ -575,6 +605,42 @@ function testFolderAccess() {
 }
 
 /**
+ * Checks if we're approaching the execution time limit
+ * @returns {boolean} True if we should stop processing
+ */
+function isApproachingTimeLimit() {
+  const currentTime = new Date().getTime();
+  const elapsed = currentTime - EXECUTION_START_TIME;
+  return elapsed >= MAX_EXECUTION_TIME;
+}
+
+/**
+ * Saves progress state for resuming later
+ * @param {Object} progressData - Progress data to save
+ */
+function saveProgress(progressData) {
+  const properties = PropertiesService.getScriptProperties();
+  properties.setProperty('PPROJ_AUDIT_PROGRESS', JSON.stringify(progressData));
+}
+
+/**
+ * Loads saved progress state
+ * @returns {Object|null} Progress data or null if none exists
+ */
+function loadProgress() {
+  const properties = PropertiesService.getScriptProperties();
+  const progressJson = properties.getProperty('PPROJ_AUDIT_PROGRESS');
+  return progressJson ? JSON.parse(progressJson) : null;
+}
+
+/**
+ * Clears saved progress state
+ */
+function clearProgress() {
+  PropertiesService.getScriptProperties().deleteProperty('PPROJ_AUDIT_PROGRESS');
+}
+
+/**
  * Logs debug messages to the Debug Log sheet
  * @param {string} message - The log message
  * @param {Object} data - Optional data object to log
@@ -868,53 +934,64 @@ function runAuditPprojWithLimit(maxClients = 0) {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   let sheet = ss.getSheetByName('Audit Results - Premiere');
 
+  // Load any existing progress
+  const savedProgress = loadProgress();
+  const isResuming = savedProgress !== null;
+
   // Create sheet if it doesn't exist
   if (!sheet) {
     sheet = ss.insertSheet('Audit Results - Premiere');
   }
 
-  // Clear and set up headers
-  sheet.clear();
-  const headers = [
-    'Client Folder',
-    'Shoot Folders',
-    'Summary',
-    '.prproj File Name',
-    'Date Modified',
-    'Status',
-    'Folder Link'
-  ];
-  sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
-  sheet.getRange(1, 1, 1, headers.length)
-    .setFontWeight('bold')
-    .setBackground('#4285f4')
-    .setFontColor('white');
+  // Clear and set up headers only if starting fresh
+  if (!isResuming) {
+    sheet.clear();
+    const headers = [
+      'Client Folder',
+      'Shoot Folders',
+      'Summary',
+      '.prproj File Name',
+      'Date Modified',
+      'Status',
+      'Folder Link'
+    ];
+    sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
+    sheet.getRange(1, 1, 1, headers.length)
+      .setFontWeight('bold')
+      .setBackground('#4285f4')
+      .setFontColor('white');
 
-  // Freeze header row
-  sheet.setFrozenRows(1);
+    // Freeze header row
+    sheet.setFrozenRows(1);
+  }
 
-  const results = [];
-  const scanStats = {
+  const results = isResuming ? savedProgress.results : [];
+  const scanStats = isResuming ? savedProgress.scanStats : {
     totalClientFolders: 0,
     clientFolderNames: [],
     totalShootFoldersChecked: 0
   };
 
   // Process post-production folder only
-  let clientsProcessed = 0;
-  logDebug('Starting Premiere Pro folder scan', {
+  let clientsProcessed = isResuming ? savedProgress.clientsProcessed : 0;
+  const processedClientNames = isResuming ? new Set(savedProgress.processedClientNames) : new Set();
+
+  logDebug(isResuming ? 'Resuming Premiere Pro folder scan' : 'Starting Premiere Pro folder scan', {
     folderId: PPROJ_FOLDER_ID,
-    maxClients: maxClients || 'unlimited'
+    maxClients: maxClients || 'unlimited',
+    resuming: isResuming,
+    previouslyProcessed: clientsProcessed
   });
 
   try {
     const rootFolder = DriveApp.getFolderById(PPROJ_FOLDER_ID);
     const folderName = rootFolder.getName();
-    Logger.log(`Scanning folder: ${folderName}`);
+    Logger.log(`Scanning folder: ${folderName}${isResuming ? ' (resuming)' : ''}`);
     logDebug(`Accessing post-production folder`, { id: PPROJ_FOLDER_ID, name: folderName });
 
     // Get all first-level subfolders (client folders)
     const clientFolders = rootFolder.getFolders();
+    let hitTimeLimit = false;
 
     while (clientFolders.hasNext()) {
       if (maxClients > 0 && clientsProcessed >= maxClients) {
@@ -924,12 +1001,27 @@ function runAuditPprojWithLimit(maxClients = 0) {
 
       const clientFolder = clientFolders.next();
       const clientName = clientFolder.getName();
+
+      // Skip if already processed (when resuming)
+      if (processedClientNames.has(clientName)) {
+        continue;
+      }
+
+      // Check execution time before processing each client
+      if (isApproachingTimeLimit()) {
+        Logger.log(`  Approaching time limit, saving progress and scheduling continuation...`);
+        logDebug(`Time limit approaching`, { clientsProcessed: clientsProcessed });
+        hitTimeLimit = true;
+        break;
+      }
+
       Logger.log(`  Checking client: ${clientName}`);
       logDebug(`Processing client folder`, { client: clientName, number: clientsProcessed + 1 });
 
       clientsProcessed++;
       scanStats.totalClientFolders++;
       scanStats.clientFolderNames.push(clientName);
+      processedClientNames.add(clientName);
 
       // Audit this client folder for .prproj files
       const clientResults = auditPprojFiles(clientFolder, clientName);
@@ -940,12 +1032,51 @@ function runAuditPprojWithLimit(maxClients = 0) {
       scanStats.totalShootFoldersChecked += clientResults.length;
     }
 
+    // If we hit the time limit, save progress and schedule continuation
+    if (hitTimeLimit) {
+      const progressData = {
+        results: results,
+        scanStats: scanStats,
+        clientsProcessed: clientsProcessed,
+        processedClientNames: Array.from(processedClientNames)
+      };
+      saveProgress(progressData);
+
+      // Write current results to sheet
+      if (results.length > 0) {
+        sheet.getRange(2, 1, results.length, 7).setValues(results);
+      }
+
+      Logger.log(`  Progress saved. Processed ${clientsProcessed} clients so far.`);
+
+      // Schedule continuation using time-based trigger
+      ScriptApp.newTrigger('continueAuditPproj')
+        .timeBased()
+        .after(30000) // Wait 30 seconds before continuing
+        .create();
+
+      SpreadsheetApp.getUi().alert(
+        'Audit Paused',
+        `Processing is taking longer than expected.\n\n` +
+        `Progress: ${clientsProcessed} clients processed so far.\n\n` +
+        `The audit will automatically continue in 30 seconds.\n` +
+        `You can close this dialog and continue working.`,
+        SpreadsheetApp.getUi().ButtonSet.OK
+      );
+
+      return;
+    }
+
+    // Completed successfully - clear progress
+    clearProgress();
+
     Logger.log(`  Found ${clientsProcessed} client folders in ${folderName}`);
     logDebug(`Folder scan complete`, { folder: folderName, clientsFound: clientsProcessed });
   } catch (e) {
     Logger.log(`Error accessing folder ${PPROJ_FOLDER_ID}: ${e.message}`);
     logDebug(`ERROR accessing folder`, { folderId: PPROJ_FOLDER_ID, error: e.message, stack: e.stack });
     SpreadsheetApp.getUi().alert(`Error accessing folder: ${e.message}\n\nMake sure the script has access to the folder.`);
+    clearProgress();
     return;
   }
 
@@ -1056,7 +1187,7 @@ function runAuditPprojWithLimit(maxClients = 0) {
   summarySheet.autoResizeColumn(2);
 
   // Alert message
-  let alertMessage = `Premiere Pro audit complete!\n\n`;
+  let alertMessage = `Premiere Pro audit complete!${isResuming ? ' (resumed from previous run)' : ''}\n\n`;
   if (maxClients > 0) {
     alertMessage += `DEBUG MODE: Processed ${scanStats.totalClientFolders} client folders\n`;
   } else {
@@ -1079,4 +1210,7 @@ function runAuditPprojWithLimit(maxClients = 0) {
   if (!maxClients) {
     SpreadsheetApp.getUi().alert(alertMessage);
   }
+
+  // Clean up any leftover triggers
+  cleanupTriggers('continueAuditPproj');
 }
