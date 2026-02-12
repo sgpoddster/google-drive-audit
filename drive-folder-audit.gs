@@ -23,6 +23,10 @@ const VALID_YEARS = ['2024', '2025', '2026'];
 // Shoot folder keywords - folders containing these words should be under year folders
 const SHOOT_KEYWORDS = ['nova', 'nest', 'exec', 'iris', 'club', 'soho'];
 
+// Premiere Pro audit configuration
+const PPROJ_FOLDER_ID = '0AOgf3l3lzd1vUk9PVA'; // Post-production folder
+const PPROJ_FILE_EXTENSION = '.prproj';
+
 // Debug mode flag
 let DEBUG_MODE = false;
 
@@ -36,6 +40,10 @@ function onOpen() {
   ui.createMenu('📁 Drive Audit')
     .addItem('Run Full Audit', 'runAudit')
     .addItem('🐛 Run Audit (Debug Mode)', 'runAuditDebugMode')
+    .addSeparator()
+    .addItem('🎬 Premiere Pro File Audit', 'runAuditPproj')
+    .addItem('🐛 Premiere Pro Audit (Debug)', 'runAuditPprojDebugMode')
+    .addSeparator()
     .addItem('🔍 Test Folder Access', 'testFolderAccess')
     .addSeparator()
     .addItem('Clear Results', 'clearResults')
@@ -47,6 +55,38 @@ function onOpen() {
  */
 function runAudit() {
   runAuditWithLimit(0); // 0 = no limit, process all folders
+}
+
+/**
+ * Runs Premiere Pro project file audit
+ */
+function runAuditPproj() {
+  runAuditPprojWithLimit(0); // 0 = no limit, process all clients
+}
+
+/**
+ * Runs Premiere Pro audit in debug mode (first 5 clients)
+ */
+function runAuditPprojDebugMode() {
+  // Clear existing debug log
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const debugSheet = ss.getSheetByName('Debug Log - Pproj');
+  if (debugSheet) {
+    ss.deleteSheet(debugSheet);
+  }
+
+  // Enable debug mode
+  DEBUG_MODE = true;
+  logDebug('=== PREMIERE PRO AUDIT DEBUG MODE ===');
+  logDebug('Note: Processing only first 5 client folders for debugging');
+
+  // Run the audit function with debug logging enabled
+  runAuditPprojWithLimit(5);
+
+  logDebug('=== PREMIERE PRO AUDIT COMPLETE ===');
+  DEBUG_MODE = false;
+
+  SpreadsheetApp.getUi().alert('Premiere Pro audit (debug) complete!\n\nCheck the "Debug Log" sheet for detailed execution logs.');
 }
 
 /**
@@ -117,6 +157,127 @@ function auditClientFolder(clientFolder, clientName) {
   });
 
   return issues;
+}
+
+/**
+ * Audits a client folder for Premiere Pro project files in shoot folders
+ * @param {Folder} clientFolder - The client's root folder
+ * @param {string} clientName - The client folder name
+ * @returns {Array} Array of audit result records (one row per client)
+ */
+function auditPprojFiles(clientFolder, clientName) {
+  logDebug('Starting Premiere Pro audit', { client: clientName });
+
+  // Step 1: Find all shoot folders in client folder
+  const shootFolders = findShootFolders(clientFolder, clientName);
+
+  if (shootFolders.length === 0) {
+    logDebug('No shoot folders found', { client: clientName });
+    return []; // No shoot folders = skip this client
+  }
+
+  // Step 2: Check ALL shoot folders for any .prproj files
+  let anyPprojFound = false;
+  let mostRecentPproj = null;
+  let totalShootFolders = shootFolders.length;
+
+  for (const shootFolder of shootFolders) {
+    const { folder, name } = shootFolder;
+
+    // Step 3: Search recursively for .prproj files
+    const allFiles = getAllFilesInFolder(folder);
+    const pprojFiles = allFiles.filter(f => f.file.getName().endsWith(PPROJ_FILE_EXTENSION));
+
+    logDebug('Checked shoot folder for .prproj', {
+      client: clientName,
+      folder: name,
+      totalFiles: allFiles.length,
+      pprojFound: pprojFiles.length
+    });
+
+    // Track if we found any .prproj files
+    if (pprojFiles.length > 0) {
+      anyPprojFound = true;
+
+      // Find the most recently modified .prproj across all shoot folders
+      for (const pprojFile of pprojFiles) {
+        if (!mostRecentPproj || pprojFile.file.getLastUpdated() > mostRecentPproj.file.getLastUpdated()) {
+          mostRecentPproj = pprojFile;
+        }
+      }
+    }
+  }
+
+  // Step 4: Return ONE result row for this client
+  const result = anyPprojFound
+    ? [
+        clientName,
+        `${totalShootFolders} shoot folder${totalShootFolders > 1 ? 's' : ''}`,
+        'Has .prproj file(s)',
+        mostRecentPproj.file.getName(),
+        formatDate(mostRecentPproj.file.getLastUpdated()),
+        'Found',
+        clientFolder.getUrl()
+      ]
+    : [
+        clientName,
+        `${totalShootFolders} shoot folder${totalShootFolders > 1 ? 's' : ''}`,
+        'No .prproj files found',
+        'N/A',
+        'N/A',
+        'MISSING',
+        clientFolder.getUrl()
+      ];
+
+  logDebug('Premiere Pro audit complete', {
+    client: clientName,
+    shootFolders: shootFolders.length,
+    hasPproj: anyPprojFound
+  });
+
+  return [result];
+}
+
+/**
+ * Finds all shoot folders within a client folder
+ * Looks in year subfolders (2024/2025/2026) and checks for SHOOT_KEYWORDS
+ * @param {Folder} clientFolder - The client's root folder
+ * @param {string} clientName - The client folder name
+ * @returns {Array} Array of {folder, name, path} objects
+ */
+function findShootFolders(clientFolder, clientName) {
+  const shootFolders = [];
+
+  // Iterate through year folders
+  const yearFolders = clientFolder.getFolders();
+  while (yearFolders.hasNext()) {
+    const yearFolder = yearFolders.next();
+    const yearName = yearFolder.getName();
+
+    // Only check if it's a valid year folder
+    if (VALID_YEARS.includes(yearName)) {
+      // Check subfolders within year folder
+      const subfolders = yearFolder.getFolders();
+      while (subfolders.hasNext()) {
+        const subfolder = subfolders.next();
+        const subfolderName = subfolder.getName();
+
+        // Check if this is a shoot folder
+        const lowerName = subfolderName.toLowerCase();
+        const isShootFolder = SHOOT_KEYWORDS.some(keyword => lowerName.includes(keyword));
+
+        if (isShootFolder) {
+          shootFolders.push({
+            folder: subfolder,
+            name: subfolderName,
+            path: `${clientName}/${yearName}/${subfolderName}`
+          });
+        }
+      }
+    }
+  }
+
+  return shootFolders;
 }
 
 /**
@@ -258,6 +419,8 @@ function formatDate(date) {
  */
 function clearResults() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
+
+  // Clear year organization audit sheets
   const sheet = ss.getSheetByName('Audit Results');
   if (sheet) {
     sheet.clear();
@@ -266,7 +429,18 @@ function clearResults() {
   if (summarySheet) {
     summarySheet.clear();
   }
-  SpreadsheetApp.getUi().alert('Results cleared.');
+
+  // Clear Premiere Pro audit sheets
+  const pprojSheet = ss.getSheetByName('Audit Results - Premiere');
+  if (pprojSheet) {
+    pprojSheet.clear();
+  }
+  const pprojSummary = ss.getSheetByName('Summary - Premiere');
+  if (pprojSummary) {
+    pprojSummary.clear();
+  }
+
+  SpreadsheetApp.getUi().alert('All results cleared.');
 }
 
 /**
@@ -679,6 +853,227 @@ function runAuditWithLimit(maxClients = 0) {
     }
   } else {
     alertMessage += `See 'Audit Results' sheet for details.`;
+  }
+
+  if (!maxClients) {
+    SpreadsheetApp.getUi().alert(alertMessage);
+  }
+}
+
+/**
+ * Runs Premiere Pro audit with a limit on number of client folders to process
+ * @param {number} maxClients - Maximum number of client folders to process (0 = no limit)
+ */
+function runAuditPprojWithLimit(maxClients = 0) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let sheet = ss.getSheetByName('Audit Results - Premiere');
+
+  // Create sheet if it doesn't exist
+  if (!sheet) {
+    sheet = ss.insertSheet('Audit Results - Premiere');
+  }
+
+  // Clear and set up headers
+  sheet.clear();
+  const headers = [
+    'Client Folder',
+    'Shoot Folders',
+    'Summary',
+    '.prproj File Name',
+    'Date Modified',
+    'Status',
+    'Folder Link'
+  ];
+  sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
+  sheet.getRange(1, 1, 1, headers.length)
+    .setFontWeight('bold')
+    .setBackground('#4285f4')
+    .setFontColor('white');
+
+  // Freeze header row
+  sheet.setFrozenRows(1);
+
+  const results = [];
+  const scanStats = {
+    totalClientFolders: 0,
+    clientFolderNames: [],
+    totalShootFoldersChecked: 0
+  };
+
+  // Process post-production folder only
+  let clientsProcessed = 0;
+  logDebug('Starting Premiere Pro folder scan', {
+    folderId: PPROJ_FOLDER_ID,
+    maxClients: maxClients || 'unlimited'
+  });
+
+  try {
+    const rootFolder = DriveApp.getFolderById(PPROJ_FOLDER_ID);
+    const folderName = rootFolder.getName();
+    Logger.log(`Scanning folder: ${folderName}`);
+    logDebug(`Accessing post-production folder`, { id: PPROJ_FOLDER_ID, name: folderName });
+
+    // Get all first-level subfolders (client folders)
+    const clientFolders = rootFolder.getFolders();
+
+    while (clientFolders.hasNext()) {
+      if (maxClients > 0 && clientsProcessed >= maxClients) {
+        logDebug(`Reached client limit of ${maxClients}, stopping scan`);
+        break;
+      }
+
+      const clientFolder = clientFolders.next();
+      const clientName = clientFolder.getName();
+      Logger.log(`  Checking client: ${clientName}`);
+      logDebug(`Processing client folder`, { client: clientName, number: clientsProcessed + 1 });
+
+      clientsProcessed++;
+      scanStats.totalClientFolders++;
+      scanStats.clientFolderNames.push(clientName);
+
+      // Audit this client folder for .prproj files
+      const clientResults = auditPprojFiles(clientFolder, clientName);
+      logDebug(`Client audit complete`, { client: clientName, resultsFound: clientResults.length });
+      results.push(...clientResults);
+
+      // Track shoot folders checked
+      scanStats.totalShootFoldersChecked += clientResults.length;
+    }
+
+    Logger.log(`  Found ${clientsProcessed} client folders in ${folderName}`);
+    logDebug(`Folder scan complete`, { folder: folderName, clientsFound: clientsProcessed });
+  } catch (e) {
+    Logger.log(`Error accessing folder ${PPROJ_FOLDER_ID}: ${e.message}`);
+    logDebug(`ERROR accessing folder`, { folderId: PPROJ_FOLDER_ID, error: e.message, stack: e.stack });
+    SpreadsheetApp.getUi().alert(`Error accessing folder: ${e.message}\n\nMake sure the script has access to the folder.`);
+    return;
+  }
+
+  logDebug(`All folders processed`, {
+    totalClientsProcessed: clientsProcessed,
+    totalResultsFound: results.length
+  });
+
+  // Write results to sheet
+  if (results.length > 0) {
+    sheet.getRange(2, 1, results.length, headers.length).setValues(results);
+
+    // Auto-resize columns
+    for (let i = 1; i <= headers.length; i++) {
+      sheet.autoResizeColumn(i);
+    }
+
+    // Add conditional formatting for status
+    const statusRange = sheet.getRange(2, 6, results.length, 1);
+    const foundRule = SpreadsheetApp.newConditionalFormatRule()
+      .whenTextEqualTo('Found')
+      .setBackground('#d9ead3')  // Light green
+      .setRanges([statusRange])
+      .build();
+    const missingRule = SpreadsheetApp.newConditionalFormatRule()
+      .whenTextEqualTo('MISSING')
+      .setBackground('#fce8e6')  // Light red
+      .setRanges([statusRange])
+      .build();
+    sheet.setConditionalFormatRules([foundRule, missingRule]);
+  }
+
+  // Add summary
+  const summarySheet = ss.getSheetByName('Summary - Premiere') || ss.insertSheet('Summary - Premiere');
+  summarySheet.clear();
+  summarySheet.getRange('A1').setValue('Premiere Pro File Audit Summary');
+  summarySheet.getRange('A1').setFontWeight('bold').setFontSize(14);
+
+  let row = 3;
+
+  // Scan statistics section
+  summarySheet.getRange(`A${row}`).setValue('=== SCAN STATISTICS ===');
+  summarySheet.getRange(`A${row}`).setFontWeight('bold');
+  row++;
+
+  summarySheet.getRange(`A${row}`).setValue('Last Run:');
+  summarySheet.getRange(`B${row}`).setValue(new Date());
+  row++;
+
+  if (maxClients > 0) {
+    summarySheet.getRange(`A${row}`).setValue('Mode:');
+    summarySheet.getRange(`B${row}`).setValue(`DEBUG (first ${maxClients} clients only)`);
+    summarySheet.getRange(`B${row}`).setFontColor('#ff0000');
+    row++;
+  }
+
+  summarySheet.getRange(`A${row}`).setValue('Folder Scanned:');
+  summarySheet.getRange(`B${row}`).setValue('Post-Production');
+  row++;
+
+  summarySheet.getRange(`A${row}`).setValue('  • Folder ID:');
+  summarySheet.getRange(`B${row}`).setValue(PPROJ_FOLDER_ID);
+  row++;
+
+  summarySheet.getRange(`A${row}`).setValue('Total Client Folders:');
+  summarySheet.getRange(`B${row}`).setValue(scanStats.totalClientFolders);
+  row++;
+
+  if (scanStats.clientFolderNames.length > 0) {
+    summarySheet.getRange(`A${row}`).setValue('Client Folders Found:');
+    row++;
+    const maxToShow = Math.min(10, scanStats.clientFolderNames.length);
+    for (let i = 0; i < maxToShow; i++) {
+      summarySheet.getRange(`A${row}`).setValue(`  • ${scanStats.clientFolderNames[i]}`);
+      row++;
+    }
+    if (scanStats.clientFolderNames.length > 10) {
+      summarySheet.getRange(`A${row}`).setValue(`  ... and ${scanStats.clientFolderNames.length - 10} more`);
+      row++;
+    }
+  }
+
+  row++; // Blank line
+
+  // Results section
+  summarySheet.getRange(`A${row}`).setValue('=== AUDIT RESULTS ===');
+  summarySheet.getRange(`A${row}`).setFontWeight('bold');
+  row++;
+
+  summarySheet.getRange(`A${row}`).setValue('Total Shoot Folders Checked:');
+  summarySheet.getRange(`B${row}`).setValue(scanStats.totalShootFoldersChecked);
+  row++;
+
+  // Count by status
+  const foundCount = results.filter(r => r[5] === 'Found').length;
+  const missingCount = results.filter(r => r[5] === 'MISSING').length;
+
+  summarySheet.getRange(`A${row}`).setValue('.prproj Files Found:');
+  summarySheet.getRange(`B${row}`).setValue(foundCount);
+  row++;
+
+  summarySheet.getRange(`A${row}`).setValue('.prproj Files Missing:');
+  summarySheet.getRange(`B${row}`).setValue(missingCount);
+  row++;
+
+  // Auto-resize columns
+  summarySheet.autoResizeColumn(1);
+  summarySheet.autoResizeColumn(2);
+
+  // Alert message
+  let alertMessage = `Premiere Pro audit complete!\n\n`;
+  if (maxClients > 0) {
+    alertMessage += `DEBUG MODE: Processed ${scanStats.totalClientFolders} client folders\n`;
+  } else {
+    alertMessage += `Scanned: ${scanStats.totalClientFolders} client folders\n`;
+  }
+  alertMessage += `Shoot folders checked: ${scanStats.totalShootFoldersChecked}\n`;
+  alertMessage += `.prproj found: ${foundCount}\n`;
+  alertMessage += `.prproj missing: ${missingCount}\n\n`;
+
+  if (results.length === 0) {
+    if (scanStats.totalClientFolders === 0) {
+      alertMessage += `⚠️  No client folders found.\nRun "Test Folder Access" to diagnose.`;
+    } else {
+      alertMessage += `✅ No shoot folders found in checked clients.`;
+    }
+  } else {
+    alertMessage += `See 'Audit Results - Premiere' sheet for details.`;
   }
 
   if (!maxClients) {
